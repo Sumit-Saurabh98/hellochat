@@ -28,5 +28,5 @@ app.use("/api/v1", userRoutes);
 const PORT = process.env.PORT || 3001;
 
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`user service is running on port ${PORT}`);
 });
