@@ -5,6 +5,20 @@ import { useAppData } from "@/context/AppContext"
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
+export interface Message {
+  _id: string;
+  chatId: string;
+  sender: string;
+  text?: string;
+  image?: {
+    url: string;
+    publicId: string;
+  };
+  messageType: "text" | "image";
+  seen: boolean;
+  seenAt?: string;
+  createdAt: string;
+}
 const ChatPage = () => {
   const {isAuth, loading} = useAppData();
   const router = useRouter();
