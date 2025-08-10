@@ -3,12 +3,11 @@ import dotenv from "dotenv";
 import cors from "cors";
 import connectDB from "./config/db.js";
 import chatRoutes from "./routes/chat.js";
+import { app, server } from "./config/socket.js";
 
 dotenv.config();
 
 connectDB();
-
-const app = express();
 
 app.use(cors());
 
@@ -19,6 +18,6 @@ app.use("/api/v1", chatRoutes);
 
 const PORT = process.env.PORT || 3003;
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
     console.log(`chat service is running on port ${PORT}`);
 });

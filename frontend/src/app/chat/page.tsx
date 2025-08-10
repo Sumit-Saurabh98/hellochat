@@ -6,11 +6,12 @@ import { CHAT_SERVICE, useAppData, User } from "@/context/AppContext";
 import { useRouter } from "next/navigation";
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import Cookies from "js-cookie";
-import axios, { AxiosError } from "axios";
+import axios from "axios";
 import toast from "react-hot-toast";
 import ChatHeader from "@/components/ChatHeader";
 import ChatMessages from "@/components/ChatMessages";
 import MessageInput from "@/components/MessageInput";
+import { SocketData } from "@/context/SocketContext";
 
 export interface Message {
   _id: string;
@@ -37,6 +38,9 @@ const ChatPage = () => {
     fetchChats,
     setChats,
   } = useAppData();
+
+  const {onlineUsers, socket} = SocketData()
+
   const [selectedUser, setSelectedUser] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -49,6 +53,12 @@ const ChatPage = () => {
   );
   const router = useRouter();
   const handleLogout = () => logoutUser();
+
+  useEffect(() => {
+    if (!isAuth && !loading) {
+      router.push("/login");
+    }
+  }, [isAuth, router, loading]);
 
   const fetchChat = useCallback(async () => {
   const token = Cookies.get("token");
@@ -70,6 +80,68 @@ const ChatPage = () => {
     toast.error("Failed to load messages");
   }
 }, [selectedUser, fetchChats]);
+
+interface NewMessage {
+  text: string;
+  sender: string;
+}
+
+
+const moveChatToTop = useCallback((chatId: string, newMessage: NewMessage, updatedUnseenCount=true) => {
+  setChats((prev)=>{
+    if(!prev) return null;
+
+    const updatedChats = [...prev];
+
+    const chatIndex = updatedChats.findIndex((chat)=>chat.chat._id === chatId);
+
+    if(chatIndex !== -1) {
+      const [moveChat] = updatedChats.splice(chatIndex, 1);
+
+      const updatedChat = {
+        ...moveChat,
+        chat: {
+          ...moveChat.chat,
+          latestMessage: {
+            text: newMessage.text,
+            sender: newMessage.sender,
+          },
+          updatedAt: new Date().toISOString(),
+          unseenCount: updatedUnseenCount && newMessage.sender !== loggedInUser?._id ? (moveChat.chat.unseenCount || 0) + 1 : moveChat.chat.unseenCount || 0,
+        }
+      }
+
+      updatedChats.unshift(updatedChat);
+    }
+
+    return updatedChats
+    
+  })
+}, [setChats, loggedInUser]);
+
+const resetUnseenCount = useCallback((chatId: string) => {
+  setChats((prev) => {
+    if (!prev) return prev;
+
+    let changed = false;
+    const updated = prev.map((chat) => {
+      if (chat.chat._id === chatId && chat.chat.unseenCount !== 0) {
+        changed = true;
+        return {
+          ...chat,
+          chat: {
+            ...chat.chat,
+            unseenCount: 0,
+          },
+        };
+      }
+      return chat;
+    });
+
+    return changed ? updated : prev;
+  });
+}, [setChats]); 
+
 
   async function createChat(u: User) {
     try {
@@ -103,6 +175,16 @@ const ChatPage = () => {
     if (!selectedUser) return;
 
     // TODO: socket setup
+
+    if(typingTimeOut){
+      clearTimeout(typingTimeOut);
+      setTypingTimeOut(null)
+    }
+
+    socket?.emit("stopTyping", {
+      chatId:selectedUser,
+      userId: loggedInUser?._id
+    })
 
     const token = Cookies.get("token");
 
@@ -146,6 +228,11 @@ const ChatPage = () => {
 
       const displayText = imageFile ? "📷 image" : message;
 
+      moveChatToTop(selectedUser, {
+        text: displayText,
+        sender: data.sender,
+      }, false)
+
     } catch {
       toast.error("Failed to send message");
     }
@@ -154,22 +241,102 @@ const ChatPage = () => {
   const handleTyping = (value:string)=>{
     setMessage(value);
 
-    if(!selectedUser) return;
+    if(!selectedUser || !socket) return;
 
     // TODO: socket setup
+
+    if(value.trim()){
+      socket.emit("typing", {
+        chatId:selectedUser,
+        userId:loggedInUser?._id
+      })
+    }
+
+    if(typingTimeOut){
+      clearTimeout(typingTimeOut);
+    }
+
+    const timeout = setTimeout(() => {
+      socket.emit("stopTyping", {
+        chatId:selectedUser,
+        userId: loggedInUser?._id
+      })
+    }, 2000);
+
+    setTypingTimeOut(timeout);
   }
 
-  useEffect(() => {
-    if (selectedUser) {
-      fetchChat();
+  useEffect(()=>{
+
+    socket?.on("newMessage", (message) => {
+      console.log("Received new message:", message);
+
+      if (selectedUser === message.chatId) {
+        setMessages((prev) => {
+          const currentMessages = prev || [];
+          const messageExists = currentMessages.some(
+            (msg) => msg._id === message._id
+          );
+
+          if (!messageExists) {
+            return [...currentMessages, message];
+          }
+          return currentMessages;
+        });
+
+        moveChatToTop(message.chatId, message, false);
+      }else{
+        moveChatToTop(message.chatId, message, true);
+      }
+    });
+
+    socket?.on("userTyping", (data)=>{
+      console.log(`User ${data.userId} is typing in chat ${data.chatId}`);
+      if(data.chatId === selectedUser && data.userId !== loggedInUser?._id){
+        setIsTyping(true);
+      }
+    })
+
+    socket?.on("userStoppedTyping", (data)=>{
+      console.log(`User ${data.userId} is stopped typing in chat ${data.chatId}`);
+      if(data.chatId === selectedUser && data.userId !== loggedInUser?._id){
+        setIsTyping(false);
+      }
+    })
+
+
+    return ()=>{
+      socket?.off("newMessage");
+      socket?.off("userTyping");
+      socket?.off("userStoppedTyping");
     }
-  }, [selectedUser, fetchChat]);
+  }, [selectedUser, socket, loggedInUser?._id, moveChatToTop])
+  
 
   useEffect(() => {
-    if (!isAuth && !loading) {
-      router.push("/login");
+  if (!selectedUser || !socket) return;
+
+  socket.emit("joinChat", selectedUser);
+
+  return () => {
+    socket.emit("leaveChat", selectedUser);
+  };
+}, [selectedUser, socket]);
+
+useEffect(() => {
+  if (!selectedUser) return;
+  fetchChat();
+  resetUnseenCount(selectedUser);
+}, [selectedUser, fetchChat, resetUnseenCount]);
+
+
+  useEffect(()=>{
+    return()=>{
+      if(typingTimeOut){
+        clearTimeout(typingTimeOut);
+      }
     }
-  }, [isAuth, router, loading]);
+  }, [typingTimeOut])
 
   if (loading) return <Loading />;
   return (
@@ -186,13 +353,14 @@ const ChatPage = () => {
         setSelectedUser={setSelectedUser}
         handleLogout={handleLogout}
         createChat={createChat}
-        //   onlineUsers,
+        onlineUsers={onlineUsers}
       />
       <div className="flex-1 flex flex-col justify-between p-4 backdrop-blur-xl bg-white/5 border-1 border-white/10">
         <ChatHeader
           user={user}
           setSidebarOpen={setSidebarOpen}
           isTyping={isTyping}
+          onlineUsers={onlineUsers}
         />
 
         <ChatMessages
