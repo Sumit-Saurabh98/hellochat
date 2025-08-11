@@ -10,8 +10,8 @@ import {
   useState,
 } from "react";
 
-export const USER_SERVICE = "http://localhost:3001";
-export const CHAT_SERVICE = "http://localhost:3003";
+export const USER_SERVICE = process.env.NEXT_PUBLIC_USER_SERVICE;
+export const CHAT_SERVICE = process.env.NEXT_PUBLIC_CHAT_SERVICE;
 
 export interface User {
   _id: string;
